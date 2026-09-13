@@ -109,6 +109,9 @@ scripts/sync-from-harness.sh /path/to/deepseek-harness
 该脚本会刷新 `lib/`、`src/` 和 `cordis.patch.yml`，重新套用本仓库的包名，并把
 harness 版本与提交写入 `PROVENANCE.md`。
 
+该检出必须已经带有管理器包，而上游 DeepSeek Harness 并不包含它——
+[docs/harness](docs/harness/README.zh.md) 里有把它装进去的集成补丁。
+
 ## 发布前的验证
 
 ```sh

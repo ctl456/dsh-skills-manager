@@ -120,6 +120,10 @@ The script refreshes `lib/`, `src/` and `cordis.patch.yml`, re-applies this
 repository's package name, and rewrites `PROVENANCE.md` with the harness version
 and commit.
 
+That checkout has to carry the manager package already, which upstream DeepSeek
+Harness does not — [docs/harness](docs/harness/README.md) holds the integration
+patch that puts it there.
+
 ## Verify before publishing
 
 ```sh
