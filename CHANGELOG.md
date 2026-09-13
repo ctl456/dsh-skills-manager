@@ -9,6 +9,18 @@ The version here, the `v<version>` git tag and the `version` field in
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-13
+
+Republished. The npm package was deleted from the registry, and npm refuses to
+reuse a version number that has already existed, so the same artifact ships under
+a new patch number. Nothing changed in the published payload (`lib/`,
+`cordis.patch.yml`, the READMEs and the licence are byte-identical to `0.1.1`).
+
+### Changed
+
+- `0.1.2` supersedes `0.1.1` as the `latest` tag. Install or upgrade with
+  `dsh plugin --profile web add @ctl456/dsh-skills-manager`.
+
 ## [0.1.1] - 2026-09-13
 
 The first usable release. `0.1.0` was a withdrawn draft that shipped a
@@ -36,6 +48,7 @@ hand-rolled bundle the harness could not load; it is superseded by this version.
   so the client half never registered and the host half did not compose its
   Profile row.
 
-[Unreleased]: https://github.com/ctl456/dsh-skills-manager/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ctl456/dsh-skills-manager/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/ctl456/dsh-skills-manager/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ctl456/dsh-skills-manager/releases/tag/v0.1.1
 [0.1.0]: https://www.npmjs.com/package/@ctl456/dsh-skills-manager/v/0.1.0
