@@ -9,7 +9,10 @@ The version here, the `v<version>` git tag and the `version` field in
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-13
+## [0.1.1] - 2026-09-13
+
+The first usable release. `0.1.0` was a withdrawn draft that shipped a
+hand-rolled bundle the harness could not load; it is superseded by this version.
 
 ### Added
 
@@ -25,5 +28,14 @@ The version here, the `v<version>` git tag and the `version` field in
   `skills_manager_set_enabled` tools, which manage the same `skills-manager`
   section of `$DSH_HOME/settings.yaml` from chat.
 
-[Unreleased]: https://github.com/ctl456/dsh-skills-manager/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/ctl456/dsh-skills-manager/releases/tag/v0.1.0
+## [0.1.0] - 2026-09-13
+
+### Withdrawn
+
+- Never usable: the published artifact was built outside the harness toolchain,
+  so the client half never registered and the host half did not compose its
+  Profile row.
+
+[Unreleased]: https://github.com/ctl456/dsh-skills-manager/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ctl456/dsh-skills-manager/releases/tag/v0.1.1
+[0.1.0]: https://www.npmjs.com/package/@ctl456/dsh-skills-manager/v/0.1.0

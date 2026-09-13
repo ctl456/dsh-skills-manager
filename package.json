@@ -1,6 +1,6 @@
 {
   "name": "@ctl456/dsh-skills-manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unofficial DeepSeek Harness plugin: add, edit, remove, enable and disable agent skills from the Web settings page or from chat, so the harness loads them with its own skill tool",
   "keywords": [
     "dsh-plugin",
