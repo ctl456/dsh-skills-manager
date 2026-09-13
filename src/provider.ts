@@ -17,6 +17,7 @@ import type {
   SkillDefinition,
   SkillLookupOptions,
   SkillProvider,
+  SkillResourceBase,
 } from '@deepseek-ai/dsh-skill'
 import { toCandidate, toDefinition, validateStoredSkill, type StoredSkill } from './skills.ts'
 
@@ -30,6 +31,12 @@ export interface ManagedSkillProviderOptions {
   readonly read: () => readonly StoredSkill[]
   /** Sink for one warning per skipped entry, so a typo is visible in the log. */
   readonly warn: (message: string) => void
+  /**
+   * Where one skill's files live, when it has any. The provider itself knows
+   * nothing about the filesystem, so the host decides the root and this
+   * callback keeps the mapping in one place.
+   */
+  readonly resourceBaseOf?: (skill: StoredSkill) => SkillResourceBase | undefined
 }
 
 /** Maps the manager's registry onto the skill registry's provider contract. */
@@ -84,7 +91,7 @@ export class ManagedSkillProvider implements SkillProvider {
       const skill = this.registry().get(candidate.name)
       if (skill === undefined || skill.enabled === false) return undefined
       if (validateStoredSkill(skill).length > 0) return undefined
-      return toDefinition(skill, this.options)
+      return toDefinition(skill, this.options, this.options.resourceBaseOf?.(skill))
     })
   }
 

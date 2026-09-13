@@ -11,7 +11,7 @@
  *
  * @module @ctl456/dsh-skills-manager/provider
  */
-import type { SkillCandidate, SkillDefinition, SkillLookupOptions, SkillProvider } from '@deepseek-ai/dsh-skill';
+import type { SkillCandidate, SkillDefinition, SkillLookupOptions, SkillProvider, SkillResourceBase } from '@deepseek-ai/dsh-skill';
 import { type StoredSkill } from './skills.ts';
 /** What the provider needs to read the current registry and report bad entries. */
 export interface ManagedSkillProviderOptions {
@@ -23,6 +23,12 @@ export interface ManagedSkillProviderOptions {
     readonly read: () => readonly StoredSkill[];
     /** Sink for one warning per skipped entry, so a typo is visible in the log. */
     readonly warn: (message: string) => void;
+    /**
+     * Where one skill's files live, when it has any. The provider itself knows
+     * nothing about the filesystem, so the host decides the root and this
+     * callback keeps the mapping in one place.
+     */
+    readonly resourceBaseOf?: (skill: StoredSkill) => SkillResourceBase | undefined;
 }
 /** Maps the manager's registry onto the skill registry's provider contract. */
 export declare class ManagedSkillProvider implements SkillProvider {

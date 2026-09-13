@@ -12,6 +12,7 @@
  */
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import { type StoredSkill } from './skills.ts';
+import type { SourceListing } from './source.ts';
 /** Live status of one managed skill, as reported to the model and the card. */
 export interface SkillStatus {
     /** Kebab-case skill name. */
@@ -42,12 +43,64 @@ export interface SkillsPort {
     /** Enable or disable one skill without changing its other fields. */
     setEnabled(name: string, enabled: boolean): Promise<void>;
 }
+/** What one import tool call reports after writing. */
+export interface ImportOutcome {
+    /** The entries that were written and are now in the registry. */
+    readonly installed: readonly SkillStatus[];
+    /** Names that produced nothing, with the reason. */
+    readonly skipped: readonly {
+        readonly name: string;
+        readonly reason: string;
+    }[];
+}
+/**
+ * Where a caller wants skills read from, in transport-neutral terms. Whoever
+ * constructs an importer maps this onto a real source, so the model tool, the
+ * card's HTTP route, and any future surface all describe an import the same way.
+ */
+export type ImportTarget = {
+    /** A repository, or any URL the location parser understands. */
+    readonly kind: 'github';
+    /** The text the user typed or pasted. */
+    readonly source: string;
+    /** A directory inside the source to read instead of the whole thing. */
+    readonly subdirectory?: string;
+} | {
+    /** An archive the caller already holds in memory. */
+    readonly kind: 'archive';
+    /** The archive's file name, recorded as provenance. */
+    readonly name: string;
+    /** The archive's bytes. */
+    readonly bytes: Uint8Array;
+};
+/**
+ * The import operations the model tool and the card's route both drive. The
+ * host supplies this because only it knows where the managed files live and
+ * which transport to fetch with; a deployment that cannot reach a source simply
+ * omits it and the surfaces are not registered.
+ */
+export interface ImportPort {
+    /**
+     * Read a target without writing anything.
+     * @param target - the repository or archive to read.
+     * @returns every skill the target offers, with its real name and size.
+     */
+    preview(target: ImportTarget): Promise<SourceListing>;
+    /**
+     * Install the chosen skills from a target.
+     * @param target - the repository or archive to read.
+     * @param names - the skill names to install.
+     * @returns the installed statuses and the names that produced nothing.
+     */
+    install(target: ImportTarget, names: readonly string[]): Promise<ImportOutcome>;
+}
 /**
  * Build the management tools for one registry port.
  * @param port - the live registry the tools read and mutate.
+ * @param importer - the source importer; omit it to leave the import tool unregistered.
  * @returns registry-ready tool definitions, in a stable order.
  */
-export declare function managerTools(port: SkillsPort): ToolDefinition[];
+export declare function managerTools(port: SkillsPort, importer?: ImportPort): ToolDefinition[];
 /**
  * Project one stored skill onto the status the tools and the card report.
  * @param skill - the stored skill to describe.

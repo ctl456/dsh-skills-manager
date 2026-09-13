@@ -18,6 +18,7 @@ import type {
   SkillCandidate,
   SkillDefinition,
   SkillInvocationPolicy,
+  SkillResourceBase,
   SkillSource,
 } from '@deepseek-ai/dsh-skill'
 
@@ -41,6 +42,20 @@ export const MANAGED_SKILL_SOURCE: SkillSource = 'skills-manager'
 
 /** Longest accepted skill name; the registry grammar itself has no length bound. */
 export const MAX_SKILL_NAME_LENGTH = 64
+
+/**
+ * Directory under the Harness home that holds the files of imported skills.
+ *
+ * Imported skills keep their body in the settings document, but the
+ * `references/`, `scripts/` and `assets/` their instructions name have to exist
+ * on disk for the model to resolve them, so they land here — beside the
+ * settings that describe them, and outside the user skill root the shipped
+ * filesystem provider scans, so one skill is never published twice.
+ */
+export const MANAGED_FILES_DIR = 'skills-manager'
+
+/** Longest accepted provenance string; long enough for a URL with a query. */
+export const MAX_ORIGIN_LENGTH = 2_048
 
 /** Longest accepted routing description, matching what a session catalog can usefully render. */
 export const MAX_DESCRIPTION_LENGTH = 1_024
@@ -72,7 +87,63 @@ export interface StoredSkill {
   userInvocable?: boolean
   /** Whether the provider publishes this skill at all; defaults to true. */
   enabled?: boolean
+  /** Provenance for an imported skill; absent for one written by hand. */
+  origin?: SkillOrigin
+  /** The files an import wrote beside the body; absent for a text-only skill. */
+  installed?: InstalledFiles
 }
+
+/** Which installer produced a skill, and therefore how to re-fetch it. */
+export type SkillOriginKind = 'github' | 'archive'
+
+/**
+ * Where an imported skill came from. A skill written by hand has no origin at
+ * all, which is what lets the card tell the two apart without a second field.
+ */
+export interface SkillOrigin {
+  /** Which installer produced the entry. */
+  readonly kind: SkillOriginKind
+  /** The URL the user supplied, or the archive's file name. */
+  readonly source: string
+  /** `owner/repo` for a GitHub import. */
+  readonly repository?: string
+  /** The ref that was resolved at install time, a branch name or a commit sha. */
+  readonly ref?: string
+  /** Repository-relative directory the skill was read from. */
+  readonly directory?: string
+  /** When the files were written, as an ISO-8601 instant. */
+  readonly installedAt: string
+}
+
+/** What the installer wrote to disk for one imported skill. */
+export interface InstalledFiles {
+  /** Directory name under {@link MANAGED_FILES_DIR}; always the skill name. */
+  readonly directory: string
+  /** Number of files written. */
+  readonly files: number
+  /** Total bytes written. */
+  readonly bytes: number
+  /** Files a discovery limit skipped, so a partial copy is visible. */
+  readonly dropped: number
+}
+
+/** Schema for one skill's provenance. */
+const SkillOriginSchema: z<SkillOrigin> = z.object({
+  kind: z.union(['github', 'archive'] as const).required(),
+  source: z.string().required().max(MAX_ORIGIN_LENGTH),
+  repository: z.string().max(MAX_ORIGIN_LENGTH),
+  ref: z.string().max(MAX_ORIGIN_LENGTH),
+  directory: z.string().max(MAX_ORIGIN_LENGTH),
+  installedAt: z.string().required().max(64),
+})
+
+/** Schema for the files an import wrote. */
+const InstalledFilesSchema: z<InstalledFiles> = z.object({
+  directory: z.string().required().max(MAX_SKILL_NAME_LENGTH),
+  files: z.number().required(),
+  bytes: z.number().required(),
+  dropped: z.number().required(),
+})
 
 /** Per-skill schema; every field is optional in the document except the name and body. */
 const StoredSkillSchema = z.object({
@@ -83,6 +154,11 @@ const StoredSkillSchema = z.object({
   disableModelInvocation: z.boolean(),
   userInvocable: z.boolean(),
   enabled: z.boolean(),
+  // Preserve omission: a nested `z.object` carries an implicit `{}` default, so an
+  // absent origin would be materialized and then fail its own required fields.
+  // Clearing the default keeps the pair optional while still validating a value.
+  origin: SkillOriginSchema.default(undefined as unknown as SkillOrigin),
+  installed: InstalledFilesSchema.default(undefined as unknown as InstalledFiles),
 })
 
 /** The settings-section value: the managed skill registry. */
@@ -104,6 +180,12 @@ export interface Config extends SkillsSection {
   rank?: number
   /** Whether to register the model-facing `skills_manager_*` tools; defaults to true. */
   tools?: boolean
+  /**
+   * GitHub token used by `skills_manager_import`. Anonymous reads are limited to
+   * 60 requests an hour per address, which a large repository can exhaust, and a
+   * token is also what reaches a private repository. Absent reads anonymously.
+   */
+  githubToken?: string
 }
 
 /** Schemastery schema for the composition entry. */
@@ -112,6 +194,7 @@ export const Config: z<Config> = z.object({
   providerName: z.string().min(1).default(DEFAULT_PROVIDER_NAME),
   rank: z.number().default(MANAGED_SKILL_RANK),
   tools: z.boolean().default(true),
+  githubToken: z.string(),
 })
 
 /**
@@ -181,13 +264,26 @@ export function toCandidate(
 
 /**
  * Project one stored skill onto a complete definition, body included.
+ *
+ * An imported skill also carries a resource base, which is how the shipped
+ * `skill` tool tells the model where to resolve the relative paths the body
+ * mentions — without it, a skill whose instructions say "run
+ * `scripts/detect-patterns.js`" is unusable. A hand-written skill has no files
+ * behind it, so it gets no base and the model is told the provider manages its
+ * resources.
  * @param skill - a valid stored skill.
  * @param options - the provider name and discovery rank to stamp on the definition.
+ * @param resourceBase - where this skill's files live, when it has any.
  * @returns the definition `ctx.skills.get()` resolves for this name.
  */
 export function toDefinition(
   skill: StoredSkill,
   options: { readonly providerName: string; readonly rank: number },
+  resourceBase?: SkillResourceBase,
 ): SkillDefinition {
-  return { ...toCandidate(skill, options), content: skill.content.trim() }
+  return {
+    ...toCandidate(skill, options),
+    content: skill.content.trim(),
+    ...resourceBase === undefined ? {} : { resourceBase },
+  }
 }

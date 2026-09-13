@@ -99,6 +99,67 @@ export interface DraftState {
   userInvocable: boolean
 }
 
+/** One skill a source offers, as the import dialog lists it. */
+export interface ImportCandidateView {
+  /** Kebab-case name the registry will use. */
+  readonly name: string
+  /** Routing description, or empty when the source's SKILL.md was unreadable. */
+  readonly description: string
+  /** Directory the skill was read from. */
+  readonly directory: string
+  /** Files the install would write. */
+  readonly files: number
+  /** Bytes the install would write. */
+  readonly bytes: number
+  /** Files a limit skipped, so a partial copy is visible before installing. */
+  readonly dropped: number
+  /** Whether the copy looks like a vendored snapshot of another skill. */
+  readonly vendored: boolean
+  /** Why it cannot be installed, as the host reported it; empty when it can. */
+  readonly problems: readonly string[]
+  /** Whether the user ticked it. */
+  readonly selected: boolean
+}
+
+/** Everything one source offered, as the dialog shows it. */
+export interface ImportListingView {
+  /** The URL or archive name that was read. */
+  readonly source: string
+  /** `owner/repo`, when the source was a repository. */
+  readonly repository?: string
+  /** The ref that was resolved. */
+  readonly ref?: string
+  /** Whether the source was truncated, which makes the listing partial. */
+  readonly truncated: boolean
+  /** The skills to offer. */
+  readonly skills: readonly ImportCandidateView[]
+  /** Directories that looked like skills but lost a name collision. */
+  readonly skipped: readonly { readonly directory: string; readonly reason: string }[]
+}
+
+/** The last refusal, in the two pieces the dialog shows. */
+export interface ImportErrorView {
+  /** What to tell the user, in their language. */
+  readonly key: SkillsManagerKey
+  /** The host's own detail, shown muted below; empty when it adds nothing. */
+  readonly detail: string
+}
+
+/** An archive the user picked, already read for upload. */
+export interface StagedArchive {
+  /** The file's name, recorded as provenance. */
+  readonly name: string
+  /** The file's bytes, base64-encoded for the JSON request. */
+  readonly base64: string
+}
+
+/**
+ * Path of the host import route. Kept as a literal rather than imported from
+ * the host module: the browser bundle must not pull in host-only code, and the
+ * path is part of the wire contract the route owns.
+ */
+const IMPORT_PATH = '/api/skills-manager.import'
+
 /** The card's full render state. */
 export interface SkillsManagerCardState {
   /** False while the Host does not serve the namespace; the card renders nothing. */
@@ -127,6 +188,22 @@ export interface SkillsManagerCardState {
   editing: string | null
   /** The form's drafts. */
   draft: DraftState
+  /** Whether the import dialog is showing. */
+  importOpen: boolean
+  /** Whether the dialog is reading a source or installing, so the buttons lock. */
+  importBusy: boolean
+  /** The repository URL or shorthand the user typed. */
+  importSource: string
+  /** An optional directory inside the repository to narrow to. */
+  importSubdirectory: string
+  /** The archive the user picked; null while importing from a repository. */
+  importArchive: StagedArchive | null
+  /** The preview listing, once one arrived; null before the first read. */
+  importListing: ImportListingView | null
+  /** The last refusal, or null when the last call succeeded. */
+  importError: ImportErrorView | null
+  /** What the last install did, so the dialog can confirm it. */
+  importResult: { readonly installed: number; readonly skipped: readonly string[] } | null
 }
 
 /** Editable draft fields. */
@@ -162,6 +239,22 @@ export interface SkillsManagerCardFace {
   setEnabled(name: string, enabled: boolean): void
   /** Restore the form to the stored skill, or clear it while adding. */
   resetDraft(): void
+  /** Open the import dialog on a clean slate. */
+  openImport(): void
+  /** Close the import dialog, discarding the preview and the staged archive. */
+  closeImport(): void
+  /** Stage the repository URL the user typed. */
+  setImportSource(text: string): void
+  /** Stage the directory narrowing. */
+  setImportSubdirectory(text: string): void
+  /** Stage a picked archive, replacing any repository source. */
+  setImportArchive(archive: StagedArchive | null): void
+  /** Tick or untick one previewed skill. */
+  toggleImportName(name: string): void
+  /** Read the staged source and show what it offers. */
+  previewImport(): void
+  /** Install every ticked skill. */
+  installImport(): void
 }
 
 /** The empty add form. */
@@ -250,13 +343,115 @@ export function draftToSkill(draft: DraftState): { skill: StoredSkill } | { erro
   }
 }
 
+/** The HTTP carrier the import dialog posts over; injectable so the controller is testable. */
+export type ImportFetch = (input: string, init?: RequestInit) => Promise<Response>
+
+/**
+ * Map a host problem code onto what the user should be told.
+ *
+ * The card never shows the host's raw code: a beginner needs to know whether to
+ * re-check the link, wait, or sign in, and each of those is a different
+ * sentence. The host's own message is kept beside it as muted detail, because
+ * it is the only thing that names the actual cause.
+ * @param problem - the stable code the route answered with.
+ * @returns the dictionary key for that cause.
+ */
+export function importProblemKey(problem: string): SkillsManagerKey {
+  switch (problem) {
+    case 'not-found': return 'importNotFound'
+    case 'rate-limited': return 'importRateLimited'
+    case 'unauthorized': return 'importUnauthorized'
+    case 'truncated': return 'importTruncated'
+    case 'unreadable': return 'importBadArchive'
+    case 'too-large': return 'importTooLarge'
+    case 'empty': return 'importEmpty'
+    case 'no-skills': return 'importNoSkills'
+    case 'unsupported-host': return 'importBadHost'
+    case 'not-a-skill-file': return 'importBadSource'
+    case 'malformed': return 'importBadSource'
+    case 'network': return 'importNetwork'
+    default: return 'importFailed'
+  }
+}
+
+/** Read one string field from an untrusted JSON object. */
+function text(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+/** Read one number field from an untrusted JSON object. */
+function count(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/** Read one boolean field from an untrusted JSON object. */
+function flag(value: unknown): boolean {
+  return value === true
+}
+
+/** Project one untrusted candidate onto the dialog's view. */
+function toCandidate(raw: unknown, selected: ReadonlySet<string>): ImportCandidateView {
+  const entry = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const problems = Array.isArray(entry['problems'])
+    ? entry['problems'].filter((item): item is string => typeof item === 'string')
+    : []
+  const name = text(entry['name'])
+  return {
+    name,
+    description: text(entry['description']),
+    directory: text(entry['directory']),
+    files: count(entry['files']),
+    bytes: count(entry['bytes']),
+    dropped: count(entry['dropped']),
+    vendored: flag(entry['vendored']),
+    problems,
+    selected: selected.has(name),
+  }
+}
+
+/** Project one untrusted listing onto the dialog's view, or null when it is not one. */
+function toListing(raw: unknown, selected: ReadonlySet<string>): ImportListingView | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const entry = raw as Record<string, unknown>
+  const skills = Array.isArray(entry['skills']) ? entry['skills'].map(item => toCandidate(item, selected)) : []
+  const skipped = Array.isArray(entry['skipped'])
+    ? entry['skipped'].flatMap((item) => {
+      if (typeof item !== 'object' || item === null) return []
+      const row = item as Record<string, unknown>
+      return [{ directory: text(row['directory']), reason: text(row['reason']) }]
+    })
+    : []
+  const repository = text(entry['repository'])
+  const ref = text(entry['ref'])
+  return {
+    source: text(entry['source']),
+    ...repository.length === 0 ? {} : { repository },
+    ...ref.length === 0 ? {} : { ref },
+    truncated: flag(entry['truncated']),
+    skills,
+    skipped,
+  }
+}
+
 /** Bridges the `skills-manager` settings scope onto the card's snapshot. */
 export class SkillsManagerCardController {
   private readonly store: SnapshotStore<SkillsManagerCardState>
   private readonly unsubscribe: () => void
+  /**
+   * The import request currently on the wire. Closing the dialog aborts it, and
+   * a request that is no longer this one drops its own answer: a host that
+   * answers slowly must not resurrect a dialog the user has already dismissed.
+   */
+  private inflight: AbortController | undefined
 
-  /** @param scope - the bound settings scope for the `skills-manager` namespace. */
-  constructor(private readonly scope: SettingsScope<SkillsManagerSettings>) {
+  /**
+   * @param scope - the bound settings scope for the `skills-manager` namespace.
+   * @param fetcher - HTTP carrier for the host import route.
+   */
+  constructor(
+    private readonly scope: SettingsScope<SkillsManagerSettings>,
+    private readonly fetcher: ImportFetch = (input, init) => fetch(input, init),
+  ) {
     this.store = createSnapshotStore<SkillsManagerCardState>({
       available: false,
       writable: false,
@@ -271,14 +466,29 @@ export class SkillsManagerCardController {
       dialogOpen: false,
       editing: null,
       draft: emptyDraft(),
+      importOpen: false,
+      importBusy: false,
+      importSource: '',
+      importSubdirectory: '',
+      importArchive: null,
+      importListing: null,
+      importError: null,
+      importResult: null,
     })
     this.unsubscribe = scope.subscribe(() => { this.project() })
     this.project()
   }
 
-  /** Release the scope subscription. */
+  /** Release the scope subscription and any read still on the wire. */
   dispose(): void {
+    this.abortImport()
     this.unsubscribe()
+  }
+
+  /** Cancel the in-flight import request, if any. */
+  private abortImport(): void {
+    this.inflight?.abort()
+    this.inflight = undefined
   }
 
   /**
@@ -336,6 +546,202 @@ export class SkillsManagerCardController {
           state.error = null
         })
       },
+      openImport: () => {
+        this.store.update((state) => {
+          state.importOpen = true
+          state.importBusy = false
+          state.importSource = ''
+          state.importSubdirectory = ''
+          state.importArchive = null
+          state.importListing = null
+          state.importError = null
+          state.importResult = null
+        })
+      },
+      closeImport: () => {
+        // A read that is still crossing the wire would otherwise answer into a
+        // dialog that no longer exists.
+        this.abortImport()
+        this.store.update((state) => {
+          state.importOpen = false
+          state.importBusy = false
+          state.importListing = null
+          state.importArchive = null
+          state.importError = null
+          state.importResult = null
+        })
+      },
+      setImportSource: (text) => {
+        this.store.update((state) => {
+          state.importSource = text
+          // Typing a repository is how a user abandons a staged archive.
+          state.importArchive = null
+          state.importResult = null
+        })
+      },
+      setImportSubdirectory: (text) => {
+        this.store.update((state) => { state.importSubdirectory = text })
+      },
+      setImportArchive: (archive) => {
+        this.store.update((state) => {
+          state.importArchive = archive
+          state.importListing = null
+          state.importError = null
+          state.importResult = null
+          if (archive !== null) state.importSource = archive.name
+        })
+      },
+      toggleImportName: (name) => {
+        this.store.update((state) => {
+          if (state.importListing === null) return
+          state.importListing = {
+            ...state.importListing,
+            skills: state.importListing.skills.map(skill =>
+              skill.name === name && skill.problems.length === 0 ? { ...skill, selected: !skill.selected } : skill),
+          }
+        })
+      },
+      previewImport: () => { void this.read() },
+      installImport: () => { void this.import() },
+    }
+  }
+
+  /** Ask the host what the staged source offers, and show it. */
+  private async read(): Promise<void> {
+    const state = this.store.getSnapshot()
+    if (state.importBusy) return
+    const body = this.requestBody()
+    if (body === undefined) return
+    this.store.update((draft) => {
+      draft.importBusy = true
+      draft.importError = null
+      draft.importListing = null
+      draft.importResult = null
+    })
+    const answer = await this.post({ action: 'preview', ...body })
+    if (answer === undefined) return
+    this.store.update((draft) => {
+      draft.importBusy = false
+      if (!answer.ok) {
+        draft.importError = answer.error
+        return
+      }
+      // Every installable skill starts ticked: a repository of one skill — the
+      // common case — then needs no further gesture, which is what makes this
+      // usable for someone who does not know what a multi-skill collection is.
+      draft.importListing = {
+        ...answer.listing,
+        skills: answer.listing.skills.map(skill => ({ ...skill, selected: skill.problems.length === 0 })),
+      }
+    })
+  }
+
+  /** Install every ticked skill from the staged source. */
+  private async import(): Promise<void> {
+    const state = this.store.getSnapshot()
+    if (state.importBusy || state.importListing === null) return
+    const names = state.importListing.skills.filter(skill => skill.selected).map(skill => skill.name)
+    if (names.length === 0) return
+    const body = this.requestBody()
+    if (body === undefined) return
+    this.store.update((draft) => {
+      draft.importBusy = true
+      draft.importError = null
+      draft.importResult = null
+    })
+    const answer = await this.post({ action: 'install', skills: names, ...body })
+    if (answer === undefined) return
+    this.store.update((draft) => {
+      draft.importBusy = false
+      if (!answer.ok) {
+        draft.importError = answer.error
+        return
+      }
+      draft.importResult = answer.result
+      // The registry itself arrives through the settings scope the Host
+      // writes, so the list below the dialog refreshes on its own.
+      draft.importListing = null
+    })
+  }
+
+  /** The staged source as request fields, or undefined when the user staged nothing usable. */
+  private requestBody(): Record<string, unknown> | undefined {
+    const state = this.store.getSnapshot()
+    if (state.importArchive !== null) {
+      return { archive: { name: state.importArchive.name, base64: state.importArchive.base64 } }
+    }
+    const source = state.importSource.trim()
+    if (source.length === 0) {
+      this.store.update((draft) => { draft.importError = { key: 'importNeedSource', detail: '' } })
+      return undefined
+    }
+    const subdirectory = state.importSubdirectory.trim()
+    return { source, ...subdirectory.length === 0 ? {} : { subdirectory } }
+  }
+
+  /**
+   * Post one import request and decode the answer, turning any failure into a
+   * view.
+   * @param body - the request the dialog staged.
+   * @returns the decoded answer, or undefined when the request was superseded
+   * (the dialog closed, or a newer request replaced it) and has nothing to say.
+   */
+  private async post(body: Record<string, unknown>): Promise<
+    | { readonly ok: true; readonly listing: ImportListingView } & { readonly result: { installed: number; skipped: readonly string[] } }
+    | { readonly ok: false; readonly error: ImportErrorView }
+    | undefined
+  > {
+    this.abortImport()
+    const controller = new AbortController()
+    this.inflight = controller
+    /** Whether this request is still the one the dialog is waiting on. */
+    const current = (): boolean => this.inflight === controller
+    let response: Response
+    try {
+      response = await this.fetcher(IMPORT_PATH, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+    } catch {
+      return current() ? { ok: false, error: { key: 'importNetwork', detail: '' } } : undefined
+    }
+    if (!current()) return undefined
+    let parsed: unknown
+    try {
+      parsed = await response.json()
+    } catch {
+      return current() ? { ok: false, error: { key: 'importNetwork', detail: '' } } : undefined
+    }
+    if (!current()) return undefined
+    this.inflight = undefined
+    const payload = (typeof parsed === 'object' && parsed !== null ? parsed : {}) as Record<string, unknown>
+    if (payload['ok'] !== true) {
+      const problem = text(payload['problem'], 'internal')
+      return { ok: false, error: { key: importProblemKey(problem), detail: text(payload['message']) } }
+    }
+    const selected = new Set(
+      this.store.getSnapshot().importListing?.skills.filter(skill => skill.selected).map(skill => skill.name) ?? [],
+    )
+    const listing = toListing(payload['listing'], selected)
+    const installed = Array.isArray(payload['installed']) ? payload['installed'] : []
+    const skipped = Array.isArray(payload['skipped'])
+      ? payload['skipped'].flatMap((item) => {
+        if (typeof item !== 'object' || item === null) return []
+        const name = text((item as Record<string, unknown>)['name'])
+        return name.length === 0 ? [] : [name]
+      })
+      : []
+    return {
+      ok: true,
+      listing: listing ?? {
+        source: text(payload['source']),
+        truncated: false,
+        skills: [],
+        skipped: [],
+      },
+      result: { installed: installed.length, skipped },
     }
   }
 

@@ -86,6 +86,59 @@ export interface DraftState {
     /** Whether the slash catalog should include the skill. */
     userInvocable: boolean;
 }
+/** One skill a source offers, as the import dialog lists it. */
+export interface ImportCandidateView {
+    /** Kebab-case name the registry will use. */
+    readonly name: string;
+    /** Routing description, or empty when the source's SKILL.md was unreadable. */
+    readonly description: string;
+    /** Directory the skill was read from. */
+    readonly directory: string;
+    /** Files the install would write. */
+    readonly files: number;
+    /** Bytes the install would write. */
+    readonly bytes: number;
+    /** Files a limit skipped, so a partial copy is visible before installing. */
+    readonly dropped: number;
+    /** Whether the copy looks like a vendored snapshot of another skill. */
+    readonly vendored: boolean;
+    /** Why it cannot be installed, as the host reported it; empty when it can. */
+    readonly problems: readonly string[];
+    /** Whether the user ticked it. */
+    readonly selected: boolean;
+}
+/** Everything one source offered, as the dialog shows it. */
+export interface ImportListingView {
+    /** The URL or archive name that was read. */
+    readonly source: string;
+    /** `owner/repo`, when the source was a repository. */
+    readonly repository?: string;
+    /** The ref that was resolved. */
+    readonly ref?: string;
+    /** Whether the source was truncated, which makes the listing partial. */
+    readonly truncated: boolean;
+    /** The skills to offer. */
+    readonly skills: readonly ImportCandidateView[];
+    /** Directories that looked like skills but lost a name collision. */
+    readonly skipped: readonly {
+        readonly directory: string;
+        readonly reason: string;
+    }[];
+}
+/** The last refusal, in the two pieces the dialog shows. */
+export interface ImportErrorView {
+    /** What to tell the user, in their language. */
+    readonly key: SkillsManagerKey;
+    /** The host's own detail, shown muted below; empty when it adds nothing. */
+    readonly detail: string;
+}
+/** An archive the user picked, already read for upload. */
+export interface StagedArchive {
+    /** The file's name, recorded as provenance. */
+    readonly name: string;
+    /** The file's bytes, base64-encoded for the JSON request. */
+    readonly base64: string;
+}
 /** The card's full render state. */
 export interface SkillsManagerCardState {
     /** False while the Host does not serve the namespace; the card renders nothing. */
@@ -114,6 +167,25 @@ export interface SkillsManagerCardState {
     editing: string | null;
     /** The form's drafts. */
     draft: DraftState;
+    /** Whether the import dialog is showing. */
+    importOpen: boolean;
+    /** Whether the dialog is reading a source or installing, so the buttons lock. */
+    importBusy: boolean;
+    /** The repository URL or shorthand the user typed. */
+    importSource: string;
+    /** An optional directory inside the repository to narrow to. */
+    importSubdirectory: string;
+    /** The archive the user picked; null while importing from a repository. */
+    importArchive: StagedArchive | null;
+    /** The preview listing, once one arrived; null before the first read. */
+    importListing: ImportListingView | null;
+    /** The last refusal, or null when the last call succeeded. */
+    importError: ImportErrorView | null;
+    /** What the last install did, so the dialog can confirm it. */
+    importResult: {
+        readonly installed: number;
+        readonly skipped: readonly string[];
+    } | null;
 }
 /** Editable draft fields. */
 export type DraftField = 'name' | 'description' | 'whenToUse' | 'content';
@@ -147,6 +219,22 @@ export interface SkillsManagerCardFace {
     setEnabled(name: string, enabled: boolean): void;
     /** Restore the form to the stored skill, or clear it while adding. */
     resetDraft(): void;
+    /** Open the import dialog on a clean slate. */
+    openImport(): void;
+    /** Close the import dialog, discarding the preview and the staged archive. */
+    closeImport(): void;
+    /** Stage the repository URL the user typed. */
+    setImportSource(text: string): void;
+    /** Stage the directory narrowing. */
+    setImportSubdirectory(text: string): void;
+    /** Stage a picked archive, replacing any repository source. */
+    setImportArchive(archive: StagedArchive | null): void;
+    /** Tick or untick one previewed skill. */
+    toggleImportName(name: string): void;
+    /** Read the staged source and show what it offers. */
+    previewImport(): void;
+    /** Install every ticked skill. */
+    installImport(): void;
 }
 /** Project one stored skill onto the card's view, decoding defaults and diagnostics. */
 export declare function toView(skill: StoredSkill): SkillView;
@@ -162,20 +250,59 @@ export declare function draftToSkill(draft: DraftState): {
 } | {
     error: SkillsManagerKey;
 };
+/** The HTTP carrier the import dialog posts over; injectable so the controller is testable. */
+export type ImportFetch = (input: string, init?: RequestInit) => Promise<Response>;
+/**
+ * Map a host problem code onto what the user should be told.
+ *
+ * The card never shows the host's raw code: a beginner needs to know whether to
+ * re-check the link, wait, or sign in, and each of those is a different
+ * sentence. The host's own message is kept beside it as muted detail, because
+ * it is the only thing that names the actual cause.
+ * @param problem - the stable code the route answered with.
+ * @returns the dictionary key for that cause.
+ */
+export declare function importProblemKey(problem: string): SkillsManagerKey;
 /** Bridges the `skills-manager` settings scope onto the card's snapshot. */
 export declare class SkillsManagerCardController {
     private readonly scope;
+    private readonly fetcher;
     private readonly store;
     private readonly unsubscribe;
-    /** @param scope - the bound settings scope for the `skills-manager` namespace. */
-    constructor(scope: SettingsScope<SkillsManagerSettings>);
-    /** Release the scope subscription. */
+    /**
+     * The import request currently on the wire. Closing the dialog aborts it, and
+     * a request that is no longer this one drops its own answer: a host that
+     * answers slowly must not resurrect a dialog the user has already dismissed.
+     */
+    private inflight;
+    /**
+     * @param scope - the bound settings scope for the `skills-manager` namespace.
+     * @param fetcher - HTTP carrier for the host import route.
+     */
+    constructor(scope: SettingsScope<SkillsManagerSettings>, fetcher?: ImportFetch);
+    /** Release the scope subscription and any read still on the wire. */
     dispose(): void;
+    /** Cancel the in-flight import request, if any. */
+    private abortImport;
     /**
      * Build the face the card's slot registration injects.
      * @returns the card's snapshot store and its gesture actions.
      */
     inject(): SkillsManagerCardFace;
+    /** Ask the host what the staged source offers, and show it. */
+    private read;
+    /** Install every ticked skill from the staged source. */
+    private import;
+    /** The staged source as request fields, or undefined when the user staged nothing usable. */
+    private requestBody;
+    /**
+     * Post one import request and decode the answer, turning any failure into a
+     * view.
+     * @param body - the request the dialog staged.
+     * @returns the decoded answer, or undefined when the request was superseded
+     * (the dialog closed, or a newer request replaced it) and has nothing to say.
+     */
+    private post;
     /** Copy the resolved scope value onto the card state. */
     private project;
     /** The currently stored skills, verbatim, so a write round-trips untouched fields. */

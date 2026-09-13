@@ -18,14 +18,16 @@
   看到它，并像读取磁盘上的 `SKILL.md` 一样读取它的正文。从网页添加的技能是一等
   技能，而不是插件私有的清单条目。
 - 不用改 YAML、不用重启，就能新增、编辑、删除、启用和停用技能。
+- 可以从 GitHub 链接或 `.zip` 压缩包导入整套技能集合：先展示来源里有什么，再只
+  安装你勾选的部分。
 - 为不熟悉配置文件的用户提供一个网页表单。
 
 ## 环境要求
 
 - 已安装带 `dsh` 命令的 DeepSeek Harness，版本 `0.1.5-rc.2` 或兼容版本。插件把它
   接入的 harness 包声明为 peer 依赖（`@deepseek-ai/dsh-skill`、`dsh-settings`、
-  `dsh-tools`、`dsh-util-values`、`@deepseek-ai/cordis`）；安装到的 profile 必须
-  已经提供这些包，官方自带的 `web` profile 满足条件。
+  `dsh-tools`、`dsh-util-values`、`dsh-home-paths`、`@deepseek-ai/cordis`）；
+  安装到的 profile 必须已经提供这些包，官方自带的 `web` profile 满足条件。
 - 安装时需要联网，让 npm 解析这些 peer 依赖。
 
 ## 安装
@@ -45,7 +47,7 @@ dsh plugin --profile web remove @ctl456/dsh-skills-manager
 
 ```sh
 npm pack                                   # 生成 dsh-skills-manager-<version>.tgz
-dsh plugin --profile web add file:/绝对路径/dsh-skills-manager-0.1.2.tgz
+dsh plugin --profile web add file:/绝对路径/dsh-skills-manager-0.2.0.tgz
 ```
 
 ## 在网页界面里使用
@@ -74,12 +76,41 @@ dsh plugin --profile web add file:/绝对路径/dsh-skills-manager-0.1.2.tgz
 
 ![添加技能后的页面：每一行显示描述、大小和操作按钮](docs/images/skills-configured.png)
 
+## 导入别人写好的技能
+
+网上发布的技能大多放在仓库或 `.zip` 里，而不是一张表单里。工具栏的
+**从 GitHub 导入** 会先读来源、不写任何东西，再安装你选择的部分。
+
+来源可以是：
+
+- 仓库地址：`https://github.com/owner/repo`。
+- 仓库里的某个目录链接：
+  `https://github.com/owner/repo/tree/main/skills/my-skill`。
+- 简写 `owner/repo`。
+- 本地 `.zip` 压缩包（最大 8 MB），来源不在 GitHub 时用。压缩包外面那层文件夹
+  会被自动去掉。
+
+点 **预览** 会读取来源，并列出它提供的每个技能：描述、文件数和将要写入的大小。
+host 无法安装的技能会连同原因一起列出，并且不能勾选。
+
+勾选想要的技能——可安装的默认全部勾上，所以只有一个技能的仓库不用再点第二次——
+然后点 **安装**。对话框会就地确认识别到的结果，后面的列表也会自动刷新。
+
+来源会按结构识别：根目录一个 `SKILL.md` 就是一个技能；`skills/<name>/SKILL.md`
+这种容器、或 `<name>/SKILL.md` 这种集合，会整体识别为其中的多个技能；
+`/tree/<ref>/<dir>` 链接则只读那一个目录。两个目录解析出同一个技能名时只安装
+一次，被跳过的那一个会明确报出来，而不是静默覆盖。
+
+仓库特别大、GitHub 只返回部分列表时，用 **限定目录** 缩小读取范围。
+
 ## 在对话里管理技能
 
 `skills_manager_list` 读取当前清单；`skills_manager_add`、
-`skills_manager_remove` 和 `skills_manager_set_enabled` 修改它。每次调用都会返回
-最新清单，包含每个技能的调用开关和校验问题，所以你可以直接让模型帮你添加技能，
-而不用自己填表。
+`skills_manager_remove` 和 `skills_manager_set_enabled` 修改它。
+`skills_manager_import` 与对话框走同一条读取路径：只给来源时是预览，同时给出
+名称时是安装，因此模型可以先翻一遍集合再决定装什么。每次调用都会返回最新清单，
+包含每个技能的调用开关和校验问题，所以你可以直接让模型帮你添加技能，而不用自己
+填表。
 
 ## 配置保存在哪里
 
@@ -87,11 +118,30 @@ dsh plugin --profile web add file:/绝对路径/dsh-skills-manager-0.1.2.tgz
 配置节。`cordis.patch.yml` 里的 `skills` 数组是组合配置的 base 层，因此 profile 或
 `--patch` 覆盖层可以预置技能，而最终生效的始终是设置文档里的值。
 
+插件的组合条目还支持这些选项：
+
+| 选项 | 默认值 | 含义 |
+|---|---|---|
+| `skills` | `[]` | 预置技能清单；设置文档里的值优先。 |
+| `providerName` | `skills-manager` | 注册到 `ctx.skills` 上的名字。 |
+| `rank` | 管理器自身的排序位 | 发现顺序。 |
+| `tools` | `true` | 是否注册 `skills_manager_*` 工具。 |
+| `githubToken` | 无 | 导入时读取 GitHub 用的 token。 |
+
+`githubToken` 只在导入时需要。GitHub 对匿名 API 请求按地址限制每小时 60 次，预览
+一个大集合就可能用光；私有仓库也必须靠它才能读取。不填时按匿名读取。
+
 ## 限制
 
 - 一个受管技能就是一段 Markdown 正文。打包资源（脚本、模板、参考文件）不在这个
   注册表范围内，这类技能请继续使用磁盘上的 `SKILL.md` 目录。
-- 技能正文以普通设置值保存，请不要把密钥写进去。
+- 技能正文以普通设置值保存，请不要把密钥写进去。导入技能的 `SKILL.md` 正文也会
+  按同样方式保存，所以如果导入的技能正文里带着密钥，那个密钥就会被写进
+  `$DSH_HOME/settings.yaml`。
+- 导入写的是文件，不是实时链接：副本不会跟随来源仓库后续的提交。对已有名字再次
+  导入会替换该技能，更新版本就是这么做的。
+- 单次导入上限为 400 个文件、单文件 2 MB、单技能 24 MB，因此价值在于大数据集或
+  二进制资源的技能不适合这种方式。
 
 ## 重新构建打包产物
 

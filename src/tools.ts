@@ -15,6 +15,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { invocationOf, validateStoredSkill, type StoredSkill } from './skills.ts'
+import type { SourceListing } from './source.ts'
 
 /** Live status of one managed skill, as reported to the model and the card. */
 export interface SkillStatus {
@@ -46,6 +47,59 @@ export interface SkillsPort {
   remove(name: string): Promise<void>
   /** Enable or disable one skill without changing its other fields. */
   setEnabled(name: string, enabled: boolean): Promise<void>
+}
+
+/** What one import tool call reports after writing. */
+export interface ImportOutcome {
+  /** The entries that were written and are now in the registry. */
+  readonly installed: readonly SkillStatus[]
+  /** Names that produced nothing, with the reason. */
+  readonly skipped: readonly { readonly name: string; readonly reason: string }[]
+}
+
+/**
+ * Where a caller wants skills read from, in transport-neutral terms. Whoever
+ * constructs an importer maps this onto a real source, so the model tool, the
+ * card's HTTP route, and any future surface all describe an import the same way.
+ */
+export type ImportTarget =
+  | {
+    /** A repository, or any URL the location parser understands. */
+    readonly kind: 'github'
+    /** The text the user typed or pasted. */
+    readonly source: string
+    /** A directory inside the source to read instead of the whole thing. */
+    readonly subdirectory?: string
+  }
+  | {
+    /** An archive the caller already holds in memory. */
+    readonly kind: 'archive'
+    /** The archive's file name, recorded as provenance. */
+    readonly name: string
+    /** The archive's bytes. */
+    readonly bytes: Uint8Array
+  }
+
+/**
+ * The import operations the model tool and the card's route both drive. The
+ * host supplies this because only it knows where the managed files live and
+ * which transport to fetch with; a deployment that cannot reach a source simply
+ * omits it and the surfaces are not registered.
+ */
+export interface ImportPort {
+  /**
+   * Read a target without writing anything.
+   * @param target - the repository or archive to read.
+   * @returns every skill the target offers, with its real name and size.
+   */
+  preview(target: ImportTarget): Promise<SourceListing>
+  /**
+   * Install the chosen skills from a target.
+   * @param target - the repository or archive to read.
+   * @param names - the skill names to install.
+   * @returns the installed statuses and the names that produced nothing.
+   */
+  install(target: ImportTarget, names: readonly string[]): Promise<ImportOutcome>
 }
 
 /** Tool output declaration shared by every management tool: pretty JSON text. */
@@ -99,9 +153,10 @@ function skillFromArgs(args: {
 /**
  * Build the management tools for one registry port.
  * @param port - the live registry the tools read and mutate.
+ * @param importer - the source importer; omit it to leave the import tool unregistered.
  * @returns registry-ready tool definitions, in a stable order.
  */
-export function managerTools(port: SkillsPort): ToolDefinition[] {
+export function managerTools(port: SkillsPort, importer?: ImportPort): ToolDefinition[] {
   const list = defineTool({
     name: 'skills_manager_list',
     description:
@@ -166,7 +221,62 @@ export function managerTools(port: SkillsPort): ToolDefinition[] {
     },
   })
 
-  return [list, add, remove, setEnabled]
+  const tools = [list, add, remove, setEnabled]
+  if (importer !== undefined) tools.push(importSkills(port, importer))
+  return tools
+}
+
+/** Shared parameter description for the import source. */
+const SOURCE_DESCRIPTION =
+  'Where the skills live: a GitHub repository URL (https://github.com/<owner>/<repo>), a "/tree/<ref>/<dir>" '
+  + 'link scoped to one directory, or the "<owner>/<repo>" shorthand.'
+
+/** Shared parameter description for the directory narrowing. */
+const SUBDIRECTORY_DESCRIPTION =
+  'A directory inside the source to read instead of the whole thing, relative to the repository root '
+  + '(for example "skills/rev-frida"). Narrow this when a repository holds many skills and only one is wanted.'
+
+/** Build the import tool, which previews a source and then installs from it. */
+function importSkills(port: SkillsPort, importer: ImportPort): ToolDefinition {
+  return defineTool({
+    name: 'skills_manager_import',
+    description:
+      'Install agent skills from a GitHub repository or a shared skill collection. Call it with only `source` '
+      + 'first: it then returns every skill the source offers, with the real name from each SKILL.md, its '
+      + 'description, and how many files and bytes it would write. Nothing is written on that call. Call it again '
+      + 'with `skills` set to the names to install, and the harness downloads those skills\' files, registers them, '
+      + 'and publishes them to the skill catalog so the `skill` tool can load them by name. A repository may hold '
+      + 'one skill at its root, many under "skills/<name>/", or a custom layout; the listing resolves that.',
+    parameters: {
+      source: { type: 'string', required: true, description: SOURCE_DESCRIPTION },
+      skills: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'The names to install, as returned by a preview call. Omit the parameter to preview instead of installing.',
+      },
+      subdirectory: { type: 'string', description: SUBDIRECTORY_DESCRIPTION },
+    },
+    output: jsonOutput(),
+    async execute(args): Promise<JsonValue> {
+      const names = args.skills ?? []
+      const target: ImportTarget = {
+        kind: 'github',
+        source: args.source,
+        ...args.subdirectory === undefined ? {} : { subdirectory: args.subdirectory },
+      }
+      if (names.length === 0) {
+        const listing = await importer.preview(target)
+        return { mode: 'preview', listing } as unknown as JsonValue
+      }
+      const outcome = await importer.install(target, names)
+      return {
+        mode: 'install',
+        installed: outcome.installed,
+        skipped: outcome.skipped,
+        skills: port.list(),
+      } as unknown as JsonValue
+    },
+  })
 }
 
 /**

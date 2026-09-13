@@ -12,7 +12,7 @@
  * @module @ctl456/dsh-skills-manager/skills
  */
 import z from '@deepseek-ai/schemastery';
-import type { SkillCandidate, SkillDefinition, SkillInvocationPolicy, SkillSource } from '@deepseek-ai/dsh-skill';
+import type { SkillCandidate, SkillDefinition, SkillInvocationPolicy, SkillResourceBase, SkillSource } from '@deepseek-ai/dsh-skill';
 /** Settings namespace owning the managed skill registry. */
 export declare const SETTINGS_NS = "skills-manager";
 /** Provider name registered on `ctx.skills`; also the value the UI keys on. */
@@ -29,6 +29,18 @@ export declare const MANAGED_SKILL_RANK = 350;
 export declare const MANAGED_SKILL_SOURCE: SkillSource;
 /** Longest accepted skill name; the registry grammar itself has no length bound. */
 export declare const MAX_SKILL_NAME_LENGTH = 64;
+/**
+ * Directory under the Harness home that holds the files of imported skills.
+ *
+ * Imported skills keep their body in the settings document, but the
+ * `references/`, `scripts/` and `assets/` their instructions name have to exist
+ * on disk for the model to resolve them, so they land here — beside the
+ * settings that describe them, and outside the user skill root the shipped
+ * filesystem provider scans, so one skill is never published twice.
+ */
+export declare const MANAGED_FILES_DIR = "skills-manager";
+/** Longest accepted provenance string; long enough for a URL with a query. */
+export declare const MAX_ORIGIN_LENGTH = 2048;
 /** Longest accepted routing description, matching what a session catalog can usefully render. */
 export declare const MAX_DESCRIPTION_LENGTH = 1024;
 /** Longest accepted extra routing guidance. */
@@ -56,6 +68,41 @@ export interface StoredSkill {
     userInvocable?: boolean;
     /** Whether the provider publishes this skill at all; defaults to true. */
     enabled?: boolean;
+    /** Provenance for an imported skill; absent for one written by hand. */
+    origin?: SkillOrigin;
+    /** The files an import wrote beside the body; absent for a text-only skill. */
+    installed?: InstalledFiles;
+}
+/** Which installer produced a skill, and therefore how to re-fetch it. */
+export type SkillOriginKind = 'github' | 'archive';
+/**
+ * Where an imported skill came from. A skill written by hand has no origin at
+ * all, which is what lets the card tell the two apart without a second field.
+ */
+export interface SkillOrigin {
+    /** Which installer produced the entry. */
+    readonly kind: SkillOriginKind;
+    /** The URL the user supplied, or the archive's file name. */
+    readonly source: string;
+    /** `owner/repo` for a GitHub import. */
+    readonly repository?: string;
+    /** The ref that was resolved at install time, a branch name or a commit sha. */
+    readonly ref?: string;
+    /** Repository-relative directory the skill was read from. */
+    readonly directory?: string;
+    /** When the files were written, as an ISO-8601 instant. */
+    readonly installedAt: string;
+}
+/** What the installer wrote to disk for one imported skill. */
+export interface InstalledFiles {
+    /** Directory name under {@link MANAGED_FILES_DIR}; always the skill name. */
+    readonly directory: string;
+    /** Number of files written. */
+    readonly files: number;
+    /** Total bytes written. */
+    readonly bytes: number;
+    /** Files a discovery limit skipped, so a partial copy is visible. */
+    readonly dropped: number;
 }
 /** The settings-section value: the managed skill registry. */
 export interface SkillsSection {
@@ -72,6 +119,12 @@ export interface Config extends SkillsSection {
     rank?: number;
     /** Whether to register the model-facing `skills_manager_*` tools; defaults to true. */
     tools?: boolean;
+    /**
+     * GitHub token used by `skills_manager_import`. Anonymous reads are limited to
+     * 60 requests an hour per address, which a large repository can exhaust, and a
+     * token is also what reaches a private repository. Absent reads anonymously.
+     */
+    githubToken?: string;
 }
 /** Schemastery schema for the composition entry. */
 export declare const Config: z<Config>;
@@ -102,12 +155,20 @@ export declare function toCandidate(skill: StoredSkill, options: {
 }): SkillCandidate;
 /**
  * Project one stored skill onto a complete definition, body included.
+ *
+ * An imported skill also carries a resource base, which is how the shipped
+ * `skill` tool tells the model where to resolve the relative paths the body
+ * mentions — without it, a skill whose instructions say "run
+ * `scripts/detect-patterns.js`" is unusable. A hand-written skill has no files
+ * behind it, so it gets no base and the model is told the provider manages its
+ * resources.
  * @param skill - a valid stored skill.
  * @param options - the provider name and discovery rank to stamp on the definition.
+ * @param resourceBase - where this skill's files live, when it has any.
  * @returns the definition `ctx.skills.get()` resolves for this name.
  */
 export declare function toDefinition(skill: StoredSkill, options: {
     readonly providerName: string;
     readonly rank: number;
-}): SkillDefinition;
+}, resourceBase?: SkillResourceBase): SkillDefinition;
 //# sourceMappingURL=skills.d.ts.map

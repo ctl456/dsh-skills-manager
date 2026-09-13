@@ -17,7 +17,9 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: the settings.section SlotMap declaration plus the ctx.settingsScope merge.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import type { DraftField, SkillsManagerCardFace } from './card-controller.ts'
+import type {
+  DraftField, SkillsManagerCardFace, SkillsManagerCardState, StagedArchive,
+} from './card-controller.ts'
 import css from './SkillsManagerCard.module.css'
 
 /** Props the renderer binds for the Skills settings section. */
@@ -81,6 +83,224 @@ function ToggleField(props: {
   )
 }
 
+/** Render a byte count as something a person can compare at a glance. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/**
+ * Read one picked file as base64, so the archive travels in the same JSON
+ * request as a repository URL rather than needing a second upload channel.
+ * @param file - the file the user picked.
+ * @returns the staged archive, or null when the browser could not read it.
+ */
+async function stageArchive(file: File): Promise<StagedArchive | null> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return { name: file.name, base64: btoa(binary) }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The import dialog: pick a source, preview it, then install what it offers.
+ * The renderer injects the action face, so `hooks` is stripped here just as
+ * the slot's InjectFace strips it for the section component.
+ */
+function ImportDialog(props: {
+  readonly t: SkillsManagerCardProps['t']
+  readonly state: SkillsManagerCardState
+  readonly face: Omit<SkillsManagerCardFace, 'hooks'>
+  readonly disabled: boolean
+}) {
+  const { t, state, face, disabled } = props
+  const listing = state.importListing
+  const ticked = listing?.skills.filter(skill => skill.selected).length ?? 0
+  const installable = listing?.skills.filter(skill => skill.problems.length === 0) ?? []
+
+  const choose = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0]
+    // Reset the input so picking the same file twice still fires a change.
+    event.target.value = ''
+    if (file === undefined) return
+    face.setImportArchive(await stageArchive(file))
+  }
+
+  return (
+    <Modal
+      open={state.importOpen}
+      onClose={() => { face.closeImport() }}
+      title={t('importTitle')}
+      closeLabel={t('close')}
+      contentClassName={css.dialogContent as string}
+      footer={(
+        <>
+          {/* Cancel stays usable while a read is crossing the wire: the host
+              bounds its own reads, but a user who has changed their mind must
+              never be held inside a dialog that is still waiting. */}
+          <button type="button" className={css.button} onClick={() => { face.closeImport() }}>
+            {t('cancel')}
+          </button>
+          {listing === null
+            ? (
+              <button type="button" className={css.primary} disabled={disabled || state.importBusy} onClick={() => { face.previewImport() }}>
+                {state.importBusy ? t('importPreviewing') : t('importPreview')}
+              </button>
+            )
+            : (
+              <button
+                type="button"
+                className={css.primary}
+                disabled={disabled || state.importBusy || ticked === 0}
+                onClick={() => { face.installImport() }}
+              >
+                {state.importBusy ? t('importInstalling') : t('importInstall', { count: ticked })}
+              </button>
+            )}
+        </>
+      )}
+    >
+      <span className={css.hint}>{t('importIntro')}</span>
+
+      {state.importArchive === null
+        ? (
+          <>
+            <TextField
+              id="skills-manager-import-source"
+              label={t('importSource')}
+              hint={t('importSourceHint')}
+              value={state.importSource}
+              disabled={disabled || state.importBusy}
+              onChange={(text) => { face.setImportSource(text) }}
+            />
+            <TextField
+              id="skills-manager-import-subdirectory"
+              label={t('importSubdirectory')}
+              hint={t('importSubdirectoryHint')}
+              value={state.importSubdirectory}
+              disabled={disabled || state.importBusy}
+              onChange={(text) => { face.setImportSubdirectory(text) }}
+            />
+          </>
+        )
+        : (
+          <div className={css.field}>
+            <span className={css.label}>{t('importArchive')}</span>
+            <span className={css.fileRow}>
+              <span className={css.fileName}>{state.importArchive.name}</span>
+              <button
+                type="button"
+                className={css.button}
+                disabled={disabled || state.importBusy}
+                onClick={() => { face.setImportArchive(null) }}
+              >
+                {t('importClearArchive')}
+              </button>
+            </span>
+          </div>
+        )}
+
+      <div className={css.field}>
+        <span className={css.label}>{t('importArchive')}</span>
+        <input
+          id="skills-manager-import-archive"
+          className={css.srOnly}
+          type="file"
+          accept=".zip,application/zip"
+          disabled={disabled || state.importBusy}
+          onChange={(event) => { void choose(event) }}
+        />
+        <span className={css.fileRow}>
+          <label className={css.button} htmlFor="skills-manager-import-archive">{t('importChooseFile')}</label>
+          <span className={css.hint}>{t('importArchiveHint')}</span>
+        </span>
+      </div>
+
+      {state.importError !== null
+        ? (
+          <>
+            <p className={css.error} role="status">{t(state.importError.key)}</p>
+            {state.importError.detail.length === 0 ? null : <span className={css.detail}>{state.importError.detail}</span>}
+          </>
+        )
+        : null}
+
+      {state.importResult !== null
+        ? (
+          <>
+            <p className={css.success} role="status">{t('importInstalled', { count: state.importResult.installed })}</p>
+            {state.importResult.skipped.length === 0
+              ? null
+              : <span className={css.detail}>{t('importSkippedNames', { names: state.importResult.skipped.join(', ') })}</span>}
+          </>
+        )
+        : null}
+
+      {listing === null ? null : (
+        <>
+          {listing.truncated ? <p className={css.error} role="status">{t('importTruncated')}</p> : null}
+          <div className={css.selectRow}>
+            <span className={css.hint}>
+              {listing.repository === undefined ? listing.source : `${listing.repository}@${listing.ref ?? ''}`}
+            </span>
+            <span className={css.selectActions}>
+              <button type="button" className={css.button} onClick={() => { for (const skill of installable) if (!skill.selected) face.toggleImportName(skill.name) }}>
+                {t('importSelectAll')}
+              </button>
+              <button type="button" className={css.button} onClick={() => { for (const skill of installable) if (skill.selected) face.toggleImportName(skill.name) }}>
+                {t('importSelectNone')}
+              </button>
+            </span>
+          </div>
+          <div className={css.preview}>
+            {listing.skills.map(skill => (
+              <label key={`${skill.directory}/${skill.name}`} className={css.candidate}>
+                <input
+                  type="checkbox"
+                  checked={skill.selected}
+                  disabled={disabled || state.importBusy || skill.problems.length > 0}
+                  onChange={() => { face.toggleImportName(skill.name) }}
+                />
+                <span className={css.candidateText}>
+                  <span className={css.candidateName}>{skill.name}</span>
+                  {skill.description.length === 0 ? null : <span className={css.candidateMeta}>{skill.description}</span>}
+                  <span className={css.candidateMeta}>
+                    {t('importFiles', { count: skill.files })}
+                    {` · ${formatBytes(skill.bytes)}`}
+                    {skill.vendored ? ` · ${t('importVendored')}` : ''}
+                    {skill.dropped === 0 ? '' : ` · ${t('importDropped', { count: skill.dropped })}`}
+                  </span>
+                  {skill.problems.length === 0
+                    ? null
+                    : (
+                      <>
+                        <span className={css.problem}>{t('importProblemLabel')}</span>
+                        {skill.problems.map(problem => <span key={problem} className={css.detail}>{problem}</span>)}
+                      </>
+                    )}
+                </span>
+              </label>
+            ))}
+          </div>
+          {listing.skipped.length === 0
+            ? null
+            : (
+              <span className={css.detail}>
+                {t('importSkippedTitle')}
+                {listing.skipped.map(entry => entry.directory).join(', ')}
+              </span>
+            )}
+        </>
+      )}
+    </Modal>
+  )
+}
+
 /**
  * Render the Skills settings section.
  * @param props - locale copy, the section snapshot, and its actions.
@@ -120,6 +340,9 @@ export function SkillsManagerCard(props: SkillsManagerCardProps) {
         <button type="button" className={css.primary} disabled={disabled} onClick={() => { props.openAdd() }}>
           <IconPlusOutline16 size={14} />
           {t('addSkill')}
+        </button>
+        <button type="button" className={css.button} disabled={disabled} onClick={() => { props.openImport() }}>
+          {t('importSkill')}
         </button>
       </div>
 
@@ -185,6 +408,8 @@ export function SkillsManagerCard(props: SkillsManagerCardProps) {
           </div>
         )
         : null}
+
+      <ImportDialog t={t} state={state} face={props} disabled={disabled} />
 
       <Modal
         open={state.dialogOpen}
