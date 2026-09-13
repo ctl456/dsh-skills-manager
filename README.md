@@ -48,7 +48,7 @@ To install a packed tarball or a checkout instead of the registry:
 
 ```sh
 npm pack                                   # produces dsh-skills-manager-<version>.tgz
-dsh plugin --profile web add file:/abs/path/to/dsh-skills-manager-0.1.0.tgz
+dsh plugin --profile web add file:/abs/path/to/dsh-skills-manager-0.1.2.tgz
 ```
 
 ## Use it in the Web UI

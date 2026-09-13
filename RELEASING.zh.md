@@ -41,10 +41,10 @@ npm run verify:install
 
 # 5. 提交、打 tag、推送 —— 推送 tag 就会触发发布 workflow
 git add -A
-git commit -m "release: v0.1.1"
-git tag -a v0.1.1 -m "Release v0.1.1"
+git commit -m "release: v0.1.2"
+git tag -a v0.1.2 -m "Release v0.1.2"
 git push origin main
-git push origin v0.1.1
+git push origin v0.1.2
 ```
 
 推送 tag 会运行 `.github/workflows/release.yml`：重新校验版本号，如果该版本
@@ -82,8 +82,8 @@ workflow 发布不了的时候（还没配 `NPM_TOKEN`，或者 npm 出故障）
 
 ```sh
 npm publish                      # 通过 prepublishOnly 执行 verify-release.mjs
-git tag -a v0.1.1 -m "Release v0.1.1"
-git push origin v0.1.1           # workflow 发现版本已在 npm 上，只创建 Release
+git tag -a v0.1.2 -m "Release v0.1.2"
+git push origin v0.1.2           # workflow 发现版本已在 npm 上，只创建 Release
 ```
 
 ## 让 workflow 自动发布

@@ -42,10 +42,10 @@ npm run verify:install
 
 # 5. commit, tag, push — the tag push starts the release workflow
 git add -A
-git commit -m "release: v0.1.1"
-git tag -a v0.1.1 -m "Release v0.1.1"
+git commit -m "release: v0.1.2"
+git tag -a v0.1.2 -m "Release v0.1.2"
 git push origin main
-git push origin v0.1.1
+git push origin v0.1.2
 ```
 
 Pushing the tag runs `.github/workflows/release.yml`, which re-checks the version,
@@ -86,8 +86,8 @@ the same version can go out from your machine:
 
 ```sh
 npm publish                      # runs verify-release.mjs through prepublishOnly
-git tag -a v0.1.1 -m "Release v0.1.1"
-git push origin v0.1.1           # the workflow sees the version on npm and only opens the Release
+git tag -a v0.1.2 -m "Release v0.1.2"
+git push origin v0.1.2           # the workflow sees the version on npm and only opens the Release
 ```
 
 ## Letting the workflow publish

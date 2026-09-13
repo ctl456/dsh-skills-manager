@@ -45,7 +45,7 @@ dsh plugin --profile web remove @ctl456/dsh-skills-manager
 
 ```sh
 npm pack                                   # 生成 dsh-skills-manager-<version>.tgz
-dsh plugin --profile web add file:/绝对路径/dsh-skills-manager-0.1.0.tgz
+dsh plugin --profile web add file:/绝对路径/dsh-skills-manager-0.1.2.tgz
 ```
 
 ## 在网页界面里使用

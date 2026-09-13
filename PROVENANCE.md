@@ -1,6 +1,6 @@
 # Provenance
 
-- Local package: `@ctl456/dsh-skills-manager@0.1.0`
+- Local package: `@ctl456/dsh-skills-manager@0.1.2`
 - Built from: `deepseek-ai/deepseek-harness` `packages/skill/skills-manager`
 - Harness version: `0.1.5-rc.2`
 - Harness commit: `c291e7961a515f6d7af9304e7fd1d257929aef26`
