@@ -1,0 +1,11 @@
+# This optional Profile layer registers the agent-skills manager: the
+# skills_manager_* tools and the "Skills" settings page. The registry starts
+# empty; skills are added from the page or by the model, and the row owns one
+# ctx.skills provider, so every entry the registry holds is loadable through
+# the harness's own `skill` tool.
+
+- insert:
+    - id: skills-manager
+      name: '@ctl456/dsh-skills-manager'
+      config:
+        skills: []

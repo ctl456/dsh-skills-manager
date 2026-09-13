@@ -1,0 +1,66 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Check that the tag, package.json and CHANGELOG agree
+        run: node scripts/verify-release.mjs
+
+      - name: Publish to npm unless that version is already there
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          # `npm view` reads the package metadata document, and right after a
+          # publish that document can still be a cached 404 on the registry CDN.
+          # The version's tarball URL is not cached the same way, so it is the
+          # tie-breaker that keeps this step from re-publishing.
+          published=false
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            published=true
+          elif curl -fsS -o /dev/null "https://registry.npmjs.org/${name}/-/${name##*/}-${version}.tgz"; then
+            published=true
+          fi
+          if [ "$published" = true ]; then
+            echo "$name@$version is already on npm — nothing to publish"
+          elif [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::$name@$version is not on npm and the NPM_TOKEN secret is not set. Add the secret, or publish this version from your machine."
+            exit 1
+          else
+            npm publish --provenance --access public
+          fi
+
+      - name: Open the GitHub Release for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists"
+          else
+            gh release create "$tag" --verify-tag --title "$tag" --generate-notes
+          fi
